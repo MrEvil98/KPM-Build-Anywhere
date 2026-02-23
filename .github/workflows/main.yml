@@ -1,0 +1,26 @@
+name: Build KPM
+on:
+  workflow_dispatch: # This creates the manual "Run" button
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Compile the C Code
+        run: |
+          # 1. Compile the code normally
+          make ARCH=arm64 KP_DIR=$(pwd)/KernelPatch || true
+          
+          # 2. Link the file WITHOUT stripping the metadata (This fixes the "Load failed" bug)
+          $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/ld.lld -r -T hello.lds -o hello_fixed.kpm hello.o
+          
+      - name: Upload the finished KPM
+        uses: actions/upload-artifact@v4
+        with:
+          name: Zenfone-KPM
+          path: hello_fixed.kpm
