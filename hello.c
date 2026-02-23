@@ -1,14 +1,15 @@
 #include <compiler.h>
 #include <kpmodule.h>
 #include <linux/string.h>
-#include <linux/sched.h> // This one we know is safe!
 
-KPM_NAME("Zenfone-PID-Scanner");
-KPM_VERSION("4.0.0");
+// 1. Module Info
+KPM_NAME("Zenfone-Spoofer");
+KPM_VERSION("1.0.0");
 KPM_AUTHOR("ZenfoneDev");
-KPM_DESCRIPTION("On-Demand BGMI PID Scanner");
+KPM_DESCRIPTION("Direct memory injection spoofer");
 KPM_LICENSE("GPL v2");
 
+// 2. Map out the memory shape
 struct new_utsname {
     char sysname[65];
     char nodename[65];
@@ -23,49 +24,36 @@ struct uts_namespace {
     struct new_utsname name;
 };
 
-// Your exact Zenfone memory address
+// 3. YOUR EXACT KERNEL MEMORY ADDRESS
 #define UTS_NS_ADDR 0xffffff966fa20fc0
 
 static char original_release[65];
 
-static long pid_hunter_init(const char *args, const char *event, void *__user reserved)
+// 4. Inject the string on Load
+static long spoofer_init(const char *args, const char *event, void *__user reserved)
 {
-    struct task_struct *task;
+    // Cast the raw address into a usable pointer
     struct uts_namespace *target_ns = (struct uts_namespace *)UTS_NS_ADDR;
-    int found_pid = -1;
-
-    // Backup the real kernel version
+    
+    // Backup the real version
     strncpy(original_release, target_ns->name.release, 65);
-
-    // 1. Scan memory ONCE when you tap "Load"
-    rcu_read_lock();
-    for_each_process(task) {
-        // Strict 15-character check to avoid false positives
-        if (strcmp(task->comm, "com.pubg.imobil") == 0) {
-            found_pid = task->pid;
-            break; // Found it, stop scanning!
-        }
-    }
-    rcu_read_unlock();
-
-    // 2. Lock the result into uname
-    if (found_pid != -1) {
-        snprintf(target_ns->name.release, 65, "BGMI-PID-%d", found_pid);
-    } else {
-        strncpy(target_ns->name.release, "BGMI-NOT-FOUND", 65);
-    }
+    
+    // OVERWRITE MEMORY!
+    strncpy(target_ns->name.release, "4.9.186-HACKED", 65);
     
     return 0;
 }
 
-static long pid_hunter_exit(void *__user reserved)
+// 5. Restore the string on Unload
+static long spoofer_exit(void *__user reserved)
 {
     struct uts_namespace *target_ns = (struct uts_namespace *)UTS_NS_ADDR;
     
-    // Put the real kernel version back when you Unload
+    // Restore memory so nothing crashes
     strncpy(target_ns->name.release, original_release, 65);
+    
     return 0;
 }
 
-KPM_INIT(pid_hunter_init);
-KPM_EXIT(pid_hunter_exit);
+KPM_INIT(spoofer_init);
+KPM_EXIT(spoofer_exit);
