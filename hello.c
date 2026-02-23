@@ -2,66 +2,67 @@
 #include <kpmodule.h>
 #include <linux/string.h>
 #include <linux/kallsyms.h>
+#include <linux/sched.h>
+#include <linux/list.h>
 
 // Module Info
-KPM_NAME("Zenfone-Spoofer");
-KPM_VERSION("1.1.1");
+KPM_NAME("Zenfone-PID-Finder");
+KPM_VERSION("1.0.0");
 KPM_AUTHOR("ZenfoneDev");
-KPM_DESCRIPTION("Dynamic UTS release spoofer");
+KPM_DESCRIPTION("Find PID by process name (KP v4 compatible)");
 KPM_LICENSE("GPL v2");
 
-// Recreate required kernel structs manually
-struct new_utsname {
-    char sysname[65];
-    char nodename[65];
-    char release[65];
-    char version[65];
-    char machine[65];
-    char domainname[65];
-};
+static struct task_struct *init_task_ptr;
 
-struct uts_namespace {
-    struct {
-        int counter;
-    } kref;
-    struct new_utsname name;
-};
-
-static struct uts_namespace *target_ns;
-static char original_release[65];
-
-static long spoofer_init(const char *args, const char *event, void *__user reserved)
+// Simple PID finder
+static int find_pid_by_name(const char *name)
 {
-    unsigned long uts_addr;
+    struct task_struct *task;
+    struct list_head *pos;
 
-    uts_addr = kallsyms_lookup_name("init_uts_ns");
-    if (!uts_addr)
+    task = init_task_ptr;
+
+    list_for_each(pos, &task->tasks) {
+        struct task_struct *t =
+            list_entry(pos, struct task_struct, tasks);
+
+        if (strcmp(t->comm, name) == 0) {
+            return t->pid;
+        }
+    }
+
+    return -1;
+}
+
+static long pidfinder_init(const char *args,
+                           const char *event,
+                           void *__user reserved)
+{
+    unsigned long addr;
+    int pid;
+
+    // Resolve init_task dynamically
+    addr = kallsyms_lookup_name("init_task");
+    if (!addr)
         return -1;
 
-    target_ns = (struct uts_namespace *)uts_addr;
+    init_task_ptr = (struct task_struct *)addr;
 
-    strscpy(original_release,
-            target_ns->name.release,
-            sizeof(original_release));
+    // Change target process name here
+    pid = find_pid_by_name("zygote");
 
-    strscpy(target_ns->name.release,
-            "4.9.186-HACKED",
-            sizeof(target_ns->name.release));
+    if (pid > 0)
+        printk("PID Finder: Found PID = %d\n", pid);
+    else
+        printk("PID Finder: Process not found\n");
 
     return 0;
 }
 
-static long spoofer_exit(void *__user reserved)
+static long pidfinder_exit(void *__user reserved)
 {
-    if (!target_ns)
-        return -1;
-
-    strscpy(target_ns->name.release,
-            original_release,
-            sizeof(target_ns->name.release));
-
     return 0;
 }
 
-KPM_INIT(spoofer_init);
-KPM_EXIT(spoofer_exit);
+KPM_INIT(pidfinder_init);
+KPM_EXIT(pidfinder_exit);
