@@ -13,50 +13,14 @@ jobs:
         run: |
           git clone https://github.com/bmax121/KernelPatch.git
 
-      - name: Inspect KP Headers
-        run: |
-          echo "=== sched.h location ==="
-          find KernelPatch -name "sched.h" 2>/dev/null
-
-          echo "=== task_struct comm field ==="
-          grep -n "comm\[" KernelPatch/kernel/linux/include/linux/sched.h 2>/dev/null | head -5
-
-          echo "=== task_struct pid field ==="
-          grep -n "pid_t.*pid" KernelPatch/kernel/linux/include/linux/sched.h 2>/dev/null | head -5
-
-          echo "=== mm_struct in sched.h ==="
-          grep -n "mm_struct\|struct mm" KernelPatch/kernel/linux/include/linux/sched.h 2>/dev/null | head -5
-
-          echo "=== tasks list_head ==="
-          grep -n "tasks" KernelPatch/kernel/linux/include/linux/sched.h 2>/dev/null | head -5
-
-          echo "=== vm_area_struct ==="
-          find KernelPatch -name "mm_types.h" 2>/dev/null
-          grep -n "vm_start\|vm_file\|vm_next" KernelPatch/kernel/linux/include/linux/mm_types.h 2>/dev/null | head -10
-
-          echo "=== kputils.h ==="
-          cat KernelPatch/kernel/patch/include/kputils.h 2>/dev/null
-
-          echo "=== ksyms.h ==="
-          cat KernelPatch/kernel/patch/include/ksyms.h 2>/dev/null
-
       - name: Compile and Link
         run: |
           export NDK_PATH=$ANDROID_NDK_LATEST_HOME
           export KP_DIR=$(pwd)/KernelPatch
-          CLANG=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/clang
-          LLD=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/ld.lld
-
           make ARCH=arm64
-
-          $LLD \
-            -T hello.lds \
-            --entry kpm_init \
-            hello.o \
-            -o hello_fixed.kpm
 
       - name: Upload KPM
         uses: actions/upload-artifact@v4
         with:
           name: Zenfone-KPM
-          path: hello_fixed.kpm
+          path: hello.kpm
