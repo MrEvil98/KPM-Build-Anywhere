@@ -41,7 +41,7 @@ KPM_LICENSE("GPL v3");
 /*  To find your app's comm, run on the device while app is running:  */
 /*    adb shell cat /proc/$(pidof com.your.app)/comm                  */
 /* ------------------------------------------------------------------ */
-#define TARGET_COMM "m.example.myapp"
+#define TARGET_COMM "MainThread-UE4"
 
 /* ------------------------------------------------------------------ */
 /*  State                                                              */
