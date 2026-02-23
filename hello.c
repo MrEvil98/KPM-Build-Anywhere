@@ -1,27 +1,39 @@
 #include <compiler.h>
 #include <kpmodule.h>
-#include <linux/printk.h>
+#include <linux/utsname.h>
+#include <linux/string.h>
 
-KPM_NAME("Zenfone-Test-KPM");
+// 1. Module Info
+KPM_NAME("Zenfone-Spoofer");
 KPM_VERSION("1.0.0");
 KPM_AUTHOR("ZenfoneDev");
-KPM_DESCRIPTION("Testing Emergency Logs");
+KPM_DESCRIPTION("Spoofs uname -r to prove KPM is working");
 KPM_LICENSE("GPL v2");
 
-static long custom_init(const char *args, const char *event, void *__user reserved)
+// 2. A place to store your real kernel version so we can restore it later
+static char original_release[65];
+
+// 3. What happens when you tap "Load"
+static long spoofer_init(const char *args, const char *event, void *__user reserved)
 {
-    // pr_emerg is "Kernel Emergency". The system CANNOT hide this.
-    pr_emerg("[ZENFONE_TEST] =======================================\n");
-    pr_emerg("[ZENFONE_TEST] EMERGENCY OVERRIDE: KPM LOADED!\n");
-    pr_emerg("[ZENFONE_TEST] =======================================\n");
+    // Save the real kernel version (4.9.186-perf+) into our backup variable
+    strncpy(original_release, init_uts_ns.name.release, 65);
+    
+    // Overwrite the live kernel memory with our custom hacked string
+    strncpy(init_uts_ns.name.release, "4.9.186-HACKED-BY-KPM", 65);
+    
     return 0;
 }
 
-static long custom_exit(void *__user reserved)
+// 4. What happens when you tap "Unload"
+static long spoofer_exit(void *__user reserved)
 {
-    pr_emerg("[ZENFONE_TEST] EMERGENCY OVERRIDE: KPM UNLOADED!\n");
+    // Put the original kernel version back so nothing breaks
+    strncpy(init_uts_ns.name.release, original_release, 65);
+    
     return 0;
 }
 
-KPM_INIT(custom_init);
-KPM_EXIT(custom_exit);
+// 5. Register the functions
+KPM_INIT(spoofer_init);
+KPM_EXIT(spoofer_exit);
