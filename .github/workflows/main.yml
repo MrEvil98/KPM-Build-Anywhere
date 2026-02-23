@@ -11,22 +11,51 @@ jobs:
 
       - name: Download KernelPatch Source
         run: |
-          # This downloads the missing KPM files you mentioned!
           git clone https://github.com/bmax121/KernelPatch.git
 
-      - name: Compile the C Code
+      - name: Inspect KP Headers
         run: |
-          # 1. Map the paths exactly like the documentation says
+          echo "=== sched.h location ==="
+          find KernelPatch -name "sched.h" 2>/dev/null
+
+          echo "=== task_struct comm field ==="
+          grep -n "comm\[" KernelPatch/kernel/linux/include/linux/sched.h 2>/dev/null | head -5
+
+          echo "=== task_struct pid field ==="
+          grep -n "pid_t.*pid" KernelPatch/kernel/linux/include/linux/sched.h 2>/dev/null | head -5
+
+          echo "=== mm_struct in sched.h ==="
+          grep -n "mm_struct\|struct mm" KernelPatch/kernel/linux/include/linux/sched.h 2>/dev/null | head -5
+
+          echo "=== tasks list_head ==="
+          grep -n "tasks" KernelPatch/kernel/linux/include/linux/sched.h 2>/dev/null | head -5
+
+          echo "=== vm_area_struct ==="
+          find KernelPatch -name "mm_types.h" 2>/dev/null
+          grep -n "vm_start\|vm_file\|vm_next" KernelPatch/kernel/linux/include/linux/mm_types.h 2>/dev/null | head -10
+
+          echo "=== kputils.h ==="
+          cat KernelPatch/kernel/patch/include/kputils.h 2>/dev/null
+
+          echo "=== ksyms.h ==="
+          cat KernelPatch/kernel/patch/include/ksyms.h 2>/dev/null
+
+      - name: Compile and Link
+        run: |
           export NDK_PATH=$ANDROID_NDK_LATEST_HOME
           export KP_DIR=$(pwd)/KernelPatch
-          
-          # 2. Compile the code normally
-          make ARCH=arm64 || true
-          
-          # 3. Link the file safely so APatch accepts it
-          $NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/ld.lld -r -T hello.lds -o hello_fixed.kpm hello.o
-          
-      - name: Upload the finished KPM
+          CLANG=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/clang
+          LLD=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/ld.lld
+
+          make ARCH=arm64
+
+          $LLD \
+            -T hello.lds \
+            --entry kpm_init \
+            hello.o \
+            -o hello_fixed.kpm
+
+      - name: Upload KPM
         uses: actions/upload-artifact@v4
         with:
           name: Zenfone-KPM
