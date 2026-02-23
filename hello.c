@@ -6,10 +6,10 @@
 KPM_NAME("Zenfone-Spoofer");
 KPM_VERSION("1.0.0");
 KPM_AUTHOR("ZenfoneDev");
-KPM_DESCRIPTION("Spoofs uname -r");
+KPM_DESCRIPTION("Direct memory injection spoofer");
 KPM_LICENSE("GPL v2");
 
-// 2. Manually teach the compiler the shape of the kernel's memory
+// 2. Map out the memory shape
 struct new_utsname {
     char sysname[65];
     char nodename[65];
@@ -20,33 +20,37 @@ struct new_utsname {
 };
 
 struct uts_namespace {
-    int kref; // Padding for the kernel reference counter
+    int kref; 
     struct new_utsname name;
 };
 
-// 3. Tell the compiler to look for this variable in the live kernel
-extern struct uts_namespace init_uts_ns;
+// 3. YOUR EXACT KERNEL MEMORY ADDRESS
+#define UTS_NS_ADDR 0xffffff966fa20fc0
 
-// 4. Backup variable
 static char original_release[65];
 
-// 5. Code to run on Load
+// 4. Inject the string on Load
 static long spoofer_init(const char *args, const char *event, void *__user reserved)
 {
-    // Backup the real version (4.9.186-perf+)
-    strncpy(original_release, init_uts_ns.name.release, 65);
+    // Cast the raw address into a usable pointer
+    struct uts_namespace *target_ns = (struct uts_namespace *)UTS_NS_ADDR;
     
-    // Inject the fake version directly into memory
-    strncpy(init_uts_ns.name.release, "4.9.186-HACKED", 65);
+    // Backup the real version
+    strncpy(original_release, target_ns->name.release, 65);
+    
+    // OVERWRITE MEMORY!
+    strncpy(target_ns->name.release, "4.9.186-HACKED", 65);
     
     return 0;
 }
 
-// 6. Code to run on Unload
+// 5. Restore the string on Unload
 static long spoofer_exit(void *__user reserved)
 {
-    // Restore the real version so nothing crashes when we leave
-    strncpy(init_uts_ns.name.release, original_release, 65);
+    struct uts_namespace *target_ns = (struct uts_namespace *)UTS_NS_ADDR;
+    
+    // Restore memory so nothing crashes
+    strncpy(target_ns->name.release, original_release, 65);
     
     return 0;
 }
