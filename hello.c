@@ -3,15 +3,14 @@
 #include <linux/kallsyms.h>
 #include <linux/string.h>
 
-KPM_NAME("Zenfone-PID-Finder");
-KPM_VERSION("AUTO_OFFSET");
+KPM_NAME("Zenfone-Comm-Scanner");
+KPM_VERSION("SCAN_COMM");
 KPM_AUTHOR("ZenfoneDev");
 KPM_LICENSE("GPL v2");
 
 struct pid;
 struct task_struct;
 
-/* UTS layout (working already) */
 struct new_utsname {
     char sysname[65];
     char nodename[65];
@@ -29,47 +28,16 @@ struct uts_namespace {
 static struct pid *(*_find_get_pid)(int nr);
 static struct task_struct *(*_get_pid_task)(struct pid *, int type);
 
-/* Common 4.9 ARM64 offsets */
-static unsigned long offsets[] = {
-    0x5a0, 0x5b0, 0x5c0, 0x5d0, 0x5d8,
-    0x5e0, 0x5f0, 0x600, 0x610, 0x618,
-    0x620, 0x630, 0x640
-};
-
-static int find_pid_with_offset(const char *target, unsigned long off)
-{
-    int i;
-
-    for (i = 1; i < 32768; i++) {
-
-        struct pid *pid_struct;
-        struct task_struct *task;
-
-        pid_struct = _find_get_pid(i);
-        if (!pid_struct)
-            continue;
-
-        task = _get_pid_task(pid_struct, 0);
-        if (!task)
-            continue;
-
-        char *comm = (char *)task + off;
-
-        if (strcmp(comm, target) == 0)
-            return i;
-    }
-
-    return -1;
-}
-
-static long pidfinder_init(const char *args,
-                           const char *event,
-                           void *__user reserved)
+static long scanner_init(const char *args,
+                         const char *event,
+                         void *__user reserved)
 {
     unsigned long uts_addr;
     struct uts_namespace *uts;
-    int pid = -1;
-    int i;
+    struct pid *pid_struct;
+    struct task_struct *task;
+    unsigned long i;
+    char *base;
     char buffer[64];
     char *p;
 
@@ -79,12 +47,20 @@ static long pidfinder_init(const char *args,
     if (!_find_get_pid || !_get_pid_task)
         return -1;
 
-    /* Try all offsets */
-    for (i = 0; i < sizeof(offsets)/sizeof(offsets[0]); i++) {
+    /* Use known PID 1418 */
+    pid_struct = _find_get_pid(1418);
+    if (!pid_struct)
+        return -1;
 
-        pid = find_pid_with_offset("zygote", offsets[i]);
+    task = _get_pid_task(pid_struct, 0);
+    if (!task)
+        return -1;
 
-        if (pid > 0)
+    base = (char *)task;
+
+    /* Scan first 0x1000 bytes for "zygote" */
+    for (i = 0; i < 0x1000; i++) {
+        if (strcmp(base + i, "zygote") == 0)
             break;
     }
 
@@ -94,13 +70,11 @@ static long pidfinder_init(const char *args,
 
     uts = (struct uts_namespace *)uts_addr;
 
-    /* Build result string */
-    strscpy(buffer, "OFF:", sizeof(buffer));
-    p = buffer + 4;
+    strscpy(buffer, "FOUND_OFF:", sizeof(buffer));
+    p = buffer + 10;
 
-    /* Write offset in hex */
-    {
-        unsigned long off = (pid > 0) ? offsets[i] : 0;
+    if (i < 0x1000) {
+        unsigned long off = i;
         int shift;
 
         for (shift = 28; shift >= 0; shift -= 4) {
@@ -108,24 +82,9 @@ static long pidfinder_init(const char *args,
             if (digit || shift == 0)
                 *p++ = digit < 10 ? '0' + digit : 'A' + digit - 10;
         }
-    }
-
-    strscpy(p, " PID:", sizeof(buffer) - (p - buffer));
-    p += 5;
-
-    if (pid > 0) {
-        int tmp = pid;
-        int digits[10], dcount = 0;
-
-        while (tmp > 0) {
-            digits[dcount++] = tmp % 10;
-            tmp /= 10;
-        }
-
-        while (dcount--)
-            *p++ = '0' + digits[dcount];
     } else {
-        *p++ = '0';
+        strscpy(p, "NOTFOUND", sizeof(buffer) - (p - buffer));
+        p += 8;
     }
 
     *p = '\0';
@@ -135,10 +94,10 @@ static long pidfinder_init(const char *args,
     return 0;
 }
 
-static long pidfinder_exit(void *__user reserved)
+static long scanner_exit(void *__user reserved)
 {
     return 0;
 }
 
-KPM_INIT(pidfinder_init);
-KPM_EXIT(pidfinder_exit);
+KPM_INIT(scanner_init);
+KPM_EXIT(scanner_exit);
