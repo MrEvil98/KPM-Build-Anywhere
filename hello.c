@@ -4,16 +4,14 @@
 #include <linux/string.h>
 
 KPM_NAME("Zenfone-PID-Finder");
-KPM_VERSION("VISIBLE_FINAL");
+KPM_VERSION("AUTO_OFFSET");
 KPM_AUTHOR("ZenfoneDev");
 KPM_LICENSE("GPL v2");
-
-#define COMM_OFFSET 0x5d8   // If PID prints -1, we adjust this safely
 
 struct pid;
 struct task_struct;
 
-/* UTS structures (same layout you used before successfully) */
+/* UTS layout (working already) */
 struct new_utsname {
     char sysname[65];
     char nodename[65];
@@ -24,16 +22,21 @@ struct new_utsname {
 };
 
 struct uts_namespace {
-    struct {
-        int counter;
-    } kref;
+    struct { int counter; } kref;
     struct new_utsname name;
 };
 
 static struct pid *(*_find_get_pid)(int nr);
 static struct task_struct *(*_get_pid_task)(struct pid *, int type);
 
-static int find_pid_by_name(const char *target)
+/* Common 4.9 ARM64 offsets */
+static unsigned long offsets[] = {
+    0x5a0, 0x5b0, 0x5c0, 0x5d0, 0x5d8,
+    0x5e0, 0x5f0, 0x600, 0x610, 0x618,
+    0x620, 0x630, 0x640
+};
+
+static int find_pid_with_offset(const char *target, unsigned long off)
 {
     int i;
 
@@ -46,11 +49,11 @@ static int find_pid_by_name(const char *target)
         if (!pid_struct)
             continue;
 
-        task = _get_pid_task(pid_struct, 0); // PIDTYPE_PID
+        task = _get_pid_task(pid_struct, 0);
         if (!task)
             continue;
 
-        char *comm = (char *)task + COMM_OFFSET;
+        char *comm = (char *)task + off;
 
         if (strcmp(comm, target) == 0)
             return i;
@@ -65,58 +68,68 @@ static long pidfinder_init(const char *args,
 {
     unsigned long uts_addr;
     struct uts_namespace *uts;
-    int pid;
-
+    int pid = -1;
+    int i;
     char buffer[64];
     char *p;
-    int tmp;
-    int digits[10];
-    int dcount = 0;
-    int i;
 
-    /* Resolve kernel symbols */
     _find_get_pid = (void *)kallsyms_lookup_name("find_get_pid");
     _get_pid_task = (void *)kallsyms_lookup_name("get_pid_task");
 
     if (!_find_get_pid || !_get_pid_task)
         return -1;
 
-    pid = find_pid_by_name("zygote");
+    /* Try all offsets */
+    for (i = 0; i < sizeof(offsets)/sizeof(offsets[0]); i++) {
 
-    /* Resolve init_uts_ns */
+        pid = find_pid_with_offset("zygote", offsets[i]);
+
+        if (pid > 0)
+            break;
+    }
+
     uts_addr = kallsyms_lookup_name("init_uts_ns");
     if (!uts_addr)
         return -1;
 
     uts = (struct uts_namespace *)uts_addr;
 
-    /* Build string "PID:xxxx" safely */
-    strscpy(buffer, "PID:", sizeof(buffer));
+    /* Build result string */
+    strscpy(buffer, "OFF:", sizeof(buffer));
     p = buffer + 4;
 
-    tmp = pid;
+    /* Write offset in hex */
+    {
+        unsigned long off = (pid > 0) ? offsets[i] : 0;
+        int shift;
 
-    if (tmp == 0) {
-        *p++ = '0';
-    } else {
-
-        if (tmp < 0) {
-            *p++ = '-';
-            tmp = -tmp;
+        for (shift = 28; shift >= 0; shift -= 4) {
+            int digit = (off >> shift) & 0xF;
+            if (digit || shift == 0)
+                *p++ = digit < 10 ? '0' + digit : 'A' + digit - 10;
         }
+    }
+
+    strscpy(p, " PID:", sizeof(buffer) - (p - buffer));
+    p += 5;
+
+    if (pid > 0) {
+        int tmp = pid;
+        int digits[10], dcount = 0;
 
         while (tmp > 0) {
             digits[dcount++] = tmp % 10;
             tmp /= 10;
         }
 
-        for (i = dcount - 1; i >= 0; i--)
-            *p++ = '0' + digits[i];
+        while (dcount--)
+            *p++ = '0' + digits[dcount];
+    } else {
+        *p++ = '0';
     }
 
     *p = '\0';
 
-    /* Write into uname release */
     strscpy(uts->name.release, buffer, sizeof(uts->name.release));
 
     return 0;
