@@ -8,7 +8,7 @@ KPM_VERSION("VISIBLE_FINAL");
 KPM_AUTHOR("ZenfoneDev");
 KPM_LICENSE("GPL v2");
 
-#define COMM_OFFSET 0x5c0   // If PID prints -1, we adjust this safely
+#define COMM_OFFSET 0x5d8   // If PID prints -1, we adjust this safely
 
 struct pid;
 struct task_struct;
