@@ -4,7 +4,7 @@
 #include <linux/string.h>
 
 KPM_NAME("Zenfone-Comm-Scanner");
-KPM_VERSION("SCAN_COMM");
+KPM_VERSION("SAFE_SCAN");
 KPM_AUTHOR("ZenfoneDev");
 KPM_LICENSE("GPL v2");
 
@@ -47,7 +47,7 @@ static long scanner_init(const char *args,
     if (!_find_get_pid || !_get_pid_task)
         return -1;
 
-    /* Use known PID 1418 */
+    /* known zygote PID */
     pid_struct = _find_get_pid(1418);
     if (!pid_struct)
         return -1;
@@ -58,9 +58,9 @@ static long scanner_init(const char *args,
 
     base = (char *)task;
 
-    /* Scan first 0x1000 bytes for "zygote" */
+    /* safe fixed-length scan */
     for (i = 0; i < 0x1000; i++) {
-        if (strcmp(base + i, "zygote") == 0)
+        if (memcmp(base + i, "zygote", 7) == 0)
             break;
     }
 
@@ -70,8 +70,8 @@ static long scanner_init(const char *args,
 
     uts = (struct uts_namespace *)uts_addr;
 
-    strscpy(buffer, "FOUND_OFF:", sizeof(buffer));
-    p = buffer + 10;
+    strscpy(buffer, "OFF:", sizeof(buffer));
+    p = buffer + 4;
 
     if (i < 0x1000) {
         unsigned long off = i;
