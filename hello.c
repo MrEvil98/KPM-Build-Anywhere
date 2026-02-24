@@ -1,45 +1,38 @@
 #include <compiler.h>
 #include <kpmodule.h>
-#include <linux/kallsyms.h>
+#include <linux/pid.h>
+#include <linux/sched.h>
 #include <linux/string.h>
 
 KPM_NAME("Zenfone-PID-Finder");
-KPM_VERSION("5.0.0");
+KPM_VERSION("SAFE");
 KPM_AUTHOR("ZenfoneDev");
 KPM_LICENSE("GPL v2");
 
-/*
-   These offsets MUST match your kernel.
-   For 4.9.186 ARM64 (Qualcomm CAF typical layout)
-   These are VERY COMMON values:
-*/
+#define COMM_OFFSET 0x5c0   // very common for 4.9 sdm845
 
-#define TASKS_OFFSET  0x2e8
-#define PID_OFFSET    0x358
-#define COMM_OFFSET   0x5c0
-
-static void *init_task_ptr;
-
-static int find_pid_by_name(const char *name)
+static int find_pid_by_name(const char *target)
 {
-    void *task;
-    void *next;
+    int i;
 
-    task = init_task_ptr;
+    for (i = 1; i < 32768; i++) {
 
-    do {
+        struct pid *pid_struct;
+        struct task_struct *task;
+
+        pid_struct = find_get_pid(i);
+        if (!pid_struct)
+            continue;
+
+        task = get_pid_task(pid_struct, PIDTYPE_PID);
+        if (!task)
+            continue;
 
         char *comm = (char *)task + COMM_OFFSET;
-        int pid = *(int *)((char *)task + PID_OFFSET);
 
-        if (strcmp(comm, name) == 0)
-            return pid;
-
-        /* manually follow list */
-        next = *(void **)((char *)task + TASKS_OFFSET);
-        task = (char *)next - TASKS_OFFSET;
-
-    } while (task != init_task_ptr);
+        if (strcmp(comm, target) == 0)
+            return i;
+    }
 
     return -1;
 }
@@ -48,16 +41,7 @@ static long pidfinder_init(const char *args,
                            const char *event,
                            void *__user reserved)
 {
-    unsigned long addr;
-
-    addr = kallsyms_lookup_name("init_task");
-    if (!addr)
-        return -1;
-
-    init_task_ptr = (void *)addr;
-
     find_pid_by_name("zygote");
-
     return 0;
 }
 
