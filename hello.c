@@ -4,14 +4,31 @@
 #include <linux/string.h>
 
 KPM_NAME("Zenfone-PID-Finder");
-KPM_VERSION("SAFE_FINAL");
+KPM_VERSION("VISIBLE");
 KPM_AUTHOR("ZenfoneDev");
 KPM_LICENSE("GPL v2");
 
-#define COMM_OFFSET 0x5c0   // temporary, we verify later
+#define COMM_OFFSET 0x5c0   // may adjust later
 
 struct pid;
 struct task_struct;
+
+/* UTS structures (you already used this successfully) */
+struct new_utsname {
+    char sysname[65];
+    char nodename[65];
+    char release[65];
+    char version[65];
+    char machine[65];
+    char domainname[65];
+};
+
+struct uts_namespace {
+    struct {
+        int counter;
+    } kref;
+    struct new_utsname name;
+};
 
 static struct pid *(*_find_get_pid)(int nr);
 static struct task_struct *(*_get_pid_task)(struct pid *, int type);
@@ -29,7 +46,7 @@ static int find_pid_by_name(const char *target)
         if (!pid_struct)
             continue;
 
-        task = _get_pid_task(pid_struct, 0); // PIDTYPE_PID = 0
+        task = _get_pid_task(pid_struct, 0); // PIDTYPE_PID
         if (!task)
             continue;
 
@@ -46,13 +63,29 @@ static long pidfinder_init(const char *args,
                            const char *event,
                            void *__user reserved)
 {
+    unsigned long uts_addr;
+    struct uts_namespace *uts;
+    int pid;
+    char buffer[64];
+
     _find_get_pid = (void *)kallsyms_lookup_name("find_get_pid");
     _get_pid_task = (void *)kallsyms_lookup_name("get_pid_task");
 
     if (!_find_get_pid || !_get_pid_task)
         return -1;
 
-    find_pid_by_name("zygote");
+    pid = find_pid_by_name("zygote");
+
+    /* resolve uts namespace */
+    uts_addr = kallsyms_lookup_name("init_uts_ns");
+    if (!uts_addr)
+        return -1;
+
+    uts = (struct uts_namespace *)uts_addr;
+
+    /* write PID into uname release */
+    snprintf(buffer, sizeof(buffer), "PID:%d", pid);
+    strscpy(uts->name.release, buffer, sizeof(uts->name.release));
 
     return 0;
 }
