@@ -1,79 +1,91 @@
 #include <compiler.h>
 #include <kpmodule.h>
-
-#include <linux/sched.h>
-#include <linux/proc_fs.h>
-#include <linux/seq_file.h>
-#include <linux/uaccess.h>
 #include <linux/string.h>
+#include <linux/kallsyms.h>
+#include <linux/sched.h>
 
 // KPM Metadata
 KPM_NAME("Zenfone-PIDFinder");
 KPM_VERSION("1.0");
 KPM_AUTHOR("ZenfoneDev");
-KPM_DESCRIPTION("PID finder via /proc interface");
+KPM_DESCRIPTION("Minimal PID finder using UTS release output");
 KPM_LICENSE("GPL v2");
 
-#define PROC_NAME "pidfinder"
-
-static struct proc_dir_entry *proc_entry;
-static char target_name[16] = "init";
-
-/* Find PID by name */
-static int find_pid_by_name(void)
-{
-    struct task_struct *task;
-
-    for_each_process(task) {
-        if (strcmp(task->comm, target_name) == 0)
-            return task->pid;
-    }
-
-    return -1;
-}
-
-/* /proc read */
-static int pidfinder_show(struct seq_file *m, void *v)
-{
-    int pid = find_pid_by_name();
-    seq_printf(m, "%d\n", pid);
-    return 0;
-}
-
-static int pidfinder_open(struct inode *inode, struct file *file)
-{
-    return single_open(file, pidfinder_show, NULL);
-}
-
-static const struct file_operations pidfinder_fops = {
-    .owner   = THIS_MODULE,
-    .open    = pidfinder_open,
-    .read    = seq_read,
-    .llseek  = seq_lseek,
-    .release = single_release,
+// Recreate required kernel structs (like your spoofer)
+struct new_utsname {
+    char sysname[65];
+    char nodename[65];
+    char release[65];
+    char version[65];
+    char machine[65];
+    char domainname[65];
 };
 
-/* KPM Init */
+struct uts_namespace {
+    struct {
+        int counter;
+    } kref;
+    struct new_utsname name;
+};
+
+static struct uts_namespace *target_ns;
+static char original_release[65];
+
 static long pidfinder_init(const char *args,
                            const char *event,
                            void *__user reserved)
 {
-    if (args && strlen(args) > 0) {
-        strscpy(target_name, args, sizeof(target_name));
+    unsigned long uts_addr;
+    struct task_struct *task;
+    int found_pid = -1;
+    char output[65];
+
+    if (!args || strlen(args) == 0)
+        return -1;
+
+    // Resolve init_uts_ns
+    uts_addr = kallsyms_lookup_name("init_uts_ns");
+    if (!uts_addr)
+        return -1;
+
+    target_ns = (struct uts_namespace *)uts_addr;
+
+    // Backup original release
+    strscpy(original_release,
+            target_ns->name.release,
+            sizeof(original_release));
+
+    // Find PID
+    for_each_process(task) {
+        if (strcmp(task->comm, args) == 0) {
+            found_pid = task->pid;
+            break;
+        }
     }
 
-    proc_entry = proc_create(PROC_NAME, 0444, NULL, &pidfinder_fops);
-    if (!proc_entry)
-        return -1;
+    // Prepare output string
+    if (found_pid >= 0)
+        snprintf(output, sizeof(output), "PID:%d", found_pid);
+    else
+        strscpy(output, "PID:-1", sizeof(output));
+
+    // Write to uname -r
+    strscpy(target_ns->name.release,
+            output,
+            sizeof(target_ns->name.release));
 
     return 0;
 }
 
-/* KPM Exit */
 static long pidfinder_exit(void *__user reserved)
 {
-    if (proc_entry)
-        remove_proc_entry(PROC_NAME, NULL);
+    if (!target_ns)
+        return -1;
+
+    // Restore original kernel release
+    strscpy(target_ns->name.release,
+            original_release,
+            sizeof(target_ns->name.release));
 
     return 0;
 }
