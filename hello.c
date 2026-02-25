@@ -4,14 +4,13 @@
 #include <linux/kallsyms.h>
 #include <linux/kernel.h>
 
-// Metadata
 KPM_NAME("Zenfone-KP-PIDFinder");
-KPM_VERSION("1.0");
+KPM_VERSION("3.0");
 KPM_AUTHOR("ZenfoneDev");
-KPM_DESCRIPTION("KernelPatch-style PID finder");
+KPM_DESCRIPTION("KernelPatch PID finder (no offsets)");
 KPM_LICENSE("GPL v2");
 
-// UTS structs (same as your spoofer)
+// UTS structures (same as your spoofer)
 struct new_utsname {
     char sysname[65];
     char nodename[65];
@@ -32,7 +31,8 @@ static struct uts_namespace *target_ns;
 static char original_release[65];
 
 // Function pointer types
-typedef void *(*next_task_t)(void *);
+typedef void *(*find_vpid_t)(int);
+typedef void *(*pid_task_t)(void *, int);
 typedef void (*get_task_comm_t)(char *, void *);
 
 static long pidfinder_init(const char *args,
@@ -40,15 +40,15 @@ static long pidfinder_init(const char *args,
                            void *__user reserved)
 {
     unsigned long uts_addr;
-    unsigned long init_task_addr;
-    unsigned long next_task_addr;
+    unsigned long find_vpid_addr;
+    unsigned long pid_task_addr;
     unsigned long get_task_comm_addr;
 
-    next_task_t next_task;
+    find_vpid_t find_vpid;
+    pid_task_t pid_task;
     get_task_comm_t get_task_comm;
 
-    void *task;
-    void *init_task;
+    int pid;
     int found = -1;
     char comm[16];
     char output[65];
@@ -58,40 +58,43 @@ static long pidfinder_init(const char *args,
 
     // Resolve required symbols
     uts_addr = kallsyms_lookup_name("init_uts_ns");
-    init_task_addr = kallsyms_lookup_name("init_task");
-    next_task_addr = kallsyms_lookup_name("next_task");
+    find_vpid_addr = kallsyms_lookup_name("find_vpid");
+    pid_task_addr = kallsyms_lookup_name("pid_task");
     get_task_comm_addr = kallsyms_lookup_name("get_task_comm");
 
-    if (!uts_addr || !init_task_addr ||
-        !next_task_addr || !get_task_comm_addr)
+    if (!uts_addr || !find_vpid_addr ||
+        !pid_task_addr || !get_task_comm_addr)
         return -1;
 
     target_ns = (struct uts_namespace *)uts_addr;
 
-    next_task = (next_task_t)next_task_addr;
+    find_vpid = (find_vpid_t)find_vpid_addr;
+    pid_task = (pid_task_t)pid_task_addr;
     get_task_comm = (get_task_comm_t)get_task_comm_addr;
 
-    init_task = (void *)init_task_addr;
-    task = init_task;
-
-    // Backup original release
+    // Backup original kernel version
     strscpy(original_release,
             target_ns->name.release,
             sizeof(original_release));
 
-    // Walk task list safely using function pointers
-    do {
+    // Scan PID range
+    for (pid = 1; pid < 32768; pid++) {
+
+        void *pid_struct = find_vpid(pid);
+        if (!pid_struct)
+            continue;
+
+        void *task = pid_task(pid_struct, 0);
+        if (!task)
+            continue;
+
         get_task_comm(comm, task);
 
         if (strcmp(comm, args) == 0) {
-            // pid is first int in task_struct on 4.9 (safe shortcut)
-            found = *(int *)task;
+            found = pid;
             break;
         }
-
-        task = next_task(task);
-
-    } while (task != init_task);
+    }
 
     if (found >= 0)
         snprintf(output, sizeof(output), "PID:%d", found);
@@ -112,7 +115,7 @@ static long pidfinder_exit(void *__user reserved)
 
     strscpy(target_ns->name.release,
             original_release,
-            sizeof(target_ns->name.release));
+            sizeof(original_release));
 
     return 0;
 }
