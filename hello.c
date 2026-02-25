@@ -1,103 +1,82 @@
 #include <compiler.h>
 #include <kpmodule.h>
-#include <linux/kallsyms.h>
+
+#include <linux/sched/signal.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+#include <linux/uaccess.h>
 #include <linux/string.h>
 
-KPM_NAME("Zenfone-Comm-Scanner");
-KPM_VERSION("SAFE_SCAN");
+// KPM Metadata
+KPM_NAME("Zenfone-PIDFinder");
+KPM_VERSION("1.0");
 KPM_AUTHOR("ZenfoneDev");
+KPM_DESCRIPTION("PID finder via /proc interface");
 KPM_LICENSE("GPL v2");
 
-struct pid;
-struct task_struct;
+#define PROC_NAME "pidfinder"
 
-struct new_utsname {
-    char sysname[65];
-    char nodename[65];
-    char release[65];
-    char version[65];
-    char machine[65];
-    char domainname[65];
-};
+static struct proc_dir_entry *proc_entry;
+static char target_name[16] = "init";
 
-struct uts_namespace {
-    struct { int counter; } kref;
-    struct new_utsname name;
-};
-
-static struct pid *(*_find_get_pid)(int nr);
-static struct task_struct *(*_get_pid_task)(struct pid *, int type);
-
-static long scanner_init(const char *args,
-                         const char *event,
-                         void *__user reserved)
+/* Find PID by name */
+static int find_pid_by_name(void)
 {
-    unsigned long uts_addr;
-    struct uts_namespace *uts;
-    struct pid *pid_struct;
     struct task_struct *task;
-    unsigned long i;
-    char *base;
-    char buffer[64];
-    char *p;
 
-    _find_get_pid = (void *)kallsyms_lookup_name("find_get_pid");
-    _get_pid_task = (void *)kallsyms_lookup_name("get_pid_task");
-
-    if (!_find_get_pid || !_get_pid_task)
-        return -1;
-
-    /* known zygote PID */
-    pid_struct = _find_get_pid(1418);
-    if (!pid_struct)
-        return -1;
-
-    task = _get_pid_task(pid_struct, 0);
-    if (!task)
-        return -1;
-
-    base = (char *)task;
-
-    /* safe fixed-length scan */
-    for (i = 0; i < 0x1000; i++) {
-        if (memcmp(base + i, "zygote", 7) == 0)
-            break;
+    for_each_process(task) {
+        if (strcmp(task->comm, target_name) == 0)
+            return task->pid;
     }
 
-    uts_addr = kallsyms_lookup_name("init_uts_ns");
-    if (!uts_addr)
-        return -1;
-
-    uts = (struct uts_namespace *)uts_addr;
-
-    strscpy(buffer, "OFF:", sizeof(buffer));
-    p = buffer + 4;
-
-    if (i < 0x1000) {
-        unsigned long off = i;
-        int shift;
-
-        for (shift = 28; shift >= 0; shift -= 4) {
-            int digit = (off >> shift) & 0xF;
-            if (digit || shift == 0)
-                *p++ = digit < 10 ? '0' + digit : 'A' + digit - 10;
-        }
-    } else {
-        strscpy(p, "NOTFOUND", sizeof(buffer) - (p - buffer));
-        p += 8;
-    }
-
-    *p = '\0';
-
-    strscpy(uts->name.release, buffer, sizeof(uts->name.release));
-
-    return 0;
+    return -1;
 }
 
-static long scanner_exit(void *__user reserved)
+/* /proc read */
+static int pidfinder_show(struct seq_file *m, void *v)
 {
+    int pid = find_pid_by_name();
+    seq_printf(m, "%d\n", pid);
     return 0;
 }
 
-KPM_INIT(scanner_init);
-KPM_EXIT(scanner_exit);
+static int pidfinder_open(struct inode *inode, struct file *file)
+{
+    return single_open(file, pidfinder_show, NULL);
+}
+
+static const struct file_operations pidfinder_fops = {
+    .owner   = THIS_MODULE,
+    .open    = pidfinder_open,
+    .read    = seq_read,
+    .llseek  = seq_lseek,
+    .release = single_release,
+};
+
+/* KPM Init */
+static long pidfinder_init(const char *args,
+                           const char *event,
+                           void *__user reserved)
+{
+    if (args && strlen(args) > 0) {
+        strscpy(target_name, args, sizeof(target_name));
+    }
+
+    proc_entry = proc_create(PROC_NAME, 0444, NULL, &pidfinder_fops);
+    if (!proc_entry)
+        return -1;
+
+    return 0;
+}
+
+/* KPM Exit */
+static long pidfinder_exit(void *__user reserved)
+{
+    if (proc_entry)
+        remove_proc_entry(PROC_NAME, NULL);
+
+    return 0;
+}
+
+KPM_INIT(pidfinder_init);
+KPM_EXIT(pidfinder_exit);
