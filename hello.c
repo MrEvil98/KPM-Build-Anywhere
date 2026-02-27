@@ -1,124 +1,142 @@
-#include <compiler.h>
-#include <kpmodule.h>
-#include <linux/string.h>
-#include <linux/kallsyms.h>
-#include <linux/kernel.h>
+/*
+ * BGMI Base Address Finder KPM for Asus Zenfone 5Z
+ * Takes a PID as argument and returns the base address of libUE4.so
+ */
 
-KPM_NAME("Zenfone-KP-PIDFinder");
-KPM_VERSION("3.0");
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/sched.h>
+#include <linux/pid.h>
+#include <linux/mm.h>
+#include <linux/file.h>
+#include <linux/fs.h>
+#include <linux/path.h>
+#include <linux/dcache.h>
+#include <linux/slab.h>
+#include <kpmodule.h>
+
+KPM_NAME("bgmi_base_finder");
+KPM_VERSION("1.0");
 KPM_AUTHOR("ZenfoneDev");
-KPM_DESCRIPTION("KernelPatch PID finder (no offsets)");
+KPM_DESCRIPTION("Find base address of libUE4.so for a given PID");
 KPM_LICENSE("GPL v2");
 
-// UTS structures (same as your spoofer)
-struct new_utsname {
-    char sysname[65];
-    char nodename[65];
-    char release[65];
-    char version[65];
-    char machine[65];
-    char domainname[65];
-};
-
-struct uts_namespace {
-    struct {
-        int counter;
-    } kref;
-    struct new_utsname name;
-};
-
-static struct uts_namespace *target_ns;
-static char original_release[65];
-
-// Function pointer types
-typedef void *(*find_vpid_t)(int);
-typedef void *(*pid_task_t)(void *, int);
-typedef void (*get_task_comm_t)(char *, void *);
-
-static long pidfinder_init(const char *args,
-                           const char *event,
-                           void *__user reserved)
+static long bgmi_base_finder_init(const char *args, const char *event, void *__user reserved)
 {
-    unsigned long uts_addr;
-    unsigned long find_vpid_addr;
-    unsigned long pid_task_addr;
-    unsigned long get_task_comm_addr;
+    pid_t pid;
+    struct pid *pid_struct;
+    struct task_struct *task;
+    struct mm_struct *mm;
+    struct vm_area_struct *vma;
+    unsigned long base_addr = 0;
+    char *path_buf;
+    int ret;
 
-    find_vpid_t find_vpid;
-    pid_task_t pid_task;
-    get_task_comm_t get_task_comm;
+    // Validate and parse the PID argument
+    if (!args || strlen(args) == 0) {
+        pr_err("bgmi_base_finder: no PID provided\n");
+        return -EINVAL;
+    }
 
-    int pid;
-    int found = -1;
-    char comm[16];
-    char output[65];
+    ret = kstrtoint(args, 10, &pid);
+    if (ret < 0) {
+        pr_err("bgmi_base_finder: invalid PID format: '%s'\n", args);
+        return ret;
+    }
 
-    if (!args || strlen(args) == 0)
-        return -1;
+    pr_info("bgmi_base_finder: searching for PID %d\n", pid);
 
-    // Resolve required symbols
-    uts_addr = kallsyms_lookup_name("init_uts_ns");
-    find_vpid_addr = kallsyms_lookup_name("find_vpid");
-    pid_task_addr = kallsyms_lookup_name("pid_task");
-    get_task_comm_addr = kallsyms_lookup_name("get_task_comm");
+    // Get the pid structure
+    pid_struct = find_get_pid(pid);
+    if (!pid_struct) {
+        pr_err("bgmi_base_finder: PID %d not found\n", pid);
+        return -ESRCH;
+    }
 
-    if (!uts_addr || !find_vpid_addr ||
-        !pid_task_addr || !get_task_comm_addr)
-        return -1;
+    // Get the task structure
+    task = get_pid_task(pid_struct, PIDTYPE_PID);
+    put_pid(pid_struct);  // release the pid reference
+    if (!task) {
+        pr_err("bgmi_base_finder: task for PID %d is gone\n", pid);
+        return -ESRCH;
+    }
 
-    target_ns = (struct uts_namespace *)uts_addr;
+    // Get the memory descriptor (mm) of the task
+    mm = get_task_mm(task);
+    put_task_struct(task);  // done with task
+    if (!mm) {
+        pr_err("bgmi_base_finder: PID %d has no memory (kernel thread?)\n", pid);
+        return -EINVAL;
+    }
 
-    find_vpid = (find_vpid_t)find_vpid_addr;
-    pid_task = (pid_task_t)pid_task_addr;
-    get_task_comm = (get_task_comm_t)get_task_comm_addr;
+    // Allocate a buffer for the file path (PATH_MAX is 4096)
+    path_buf = kmalloc(PATH_MAX, GFP_KERNEL);
+    if (!path_buf) {
+        mmput(mm);
+        return -ENOMEM;
+    }
 
-    // Backup original kernel version
-    strscpy(original_release,
-            target_ns->name.release,
-            sizeof(original_release));
+    // Lock the mmap for reading while walking the VMA list
+    down_read(&mm->mmap_sem);
 
-    // Scan PID range
-    for (pid = 1; pid < 32768; pid++) {
+    // Walk through all VMAs of the process
+    for (vma = mm->mmap; vma; vma = vma->vm_next) {
+        struct file *file = vma->vm_file;
+        if (!file)
+            continue;   // anonymous mapping, skip
 
-        void *pid_struct = find_vpid(pid);
-        if (!pid_struct)
-            continue;
+        // Get the full path of the mapped file
+        char *path = file_path(file, path_buf, PATH_MAX);
+        if (IS_ERR(path))
+            continue;   // path resolution failed, skip this VMA
 
-        void *task = pid_task(pid_struct, 0);
-        if (!task)
-            continue;
-
-        get_task_comm(comm, task);
-
-        if (strcmp(comm, args) == 0) {
-            found = pid;
-            break;
+        // Look for libUE4.so in the path (case‑sensitive)
+        if (strstr(path, "libUE4.so")) {
+            // The base address of the library is the VMA with file offset 0
+            if (vma->vm_pgoff == 0) {
+                base_addr = vma->vm_start;
+                break;  // found the exact base, stop searching
+            }
+            // If we haven't found offset 0 yet, keep the smallest start as fallback
+            if (base_addr == 0 || vma->vm_start < base_addr)
+                base_addr = vma->vm_start;
         }
     }
 
-    if (found >= 0)
-        snprintf(output, sizeof(output), "PID:%d", found);
-    else
-        strscpy(output, "PID:-1", sizeof(output));
+    up_read(&mm->mmap_sem);
+    mmput(mm);
+    kfree(path_buf);
 
-    strscpy(target_ns->name.release,
-            output,
-            sizeof(target_ns->name.release));
+    // Check if we found anything
+    if (base_addr == 0) {
+        pr_err("bgmi_base_finder: libUE4.so not found in PID %d\n", pid);
+        return -ENOENT;
+    }
 
-    return 0;
+    // Print the result to kernel log (APatch can capture it)
+    pr_info("bgmi_base_finder: base address of libUE4.so for PID %d = 0x%lx\n", pid, base_addr);
+
+    // If APatch provides a userspace buffer via 'reserved', we can copy the result there
+    // Uncomment the following block if needed.
+    /*
+    if (reserved) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "0x%lx", base_addr);
+        if (copy_to_user(reserved, buf, strlen(buf) + 1)) {
+            pr_err("bgmi_base_finder: failed to copy to userspace\n");
+            return -EFAULT;
+        }
+    }
+    */
+
+    return 0;   // success
 }
 
-static long pidfinder_exit(void *__user reserved)
+static long bgmi_base_finder_exit(void *__user reserved)
 {
-    if (!target_ns)
-        return -1;
-
-    strscpy(target_ns->name.release,
-            original_release,
-            sizeof(original_release));
-
+    // Nothing to clean up
     return 0;
 }
 
-KPM_INIT(pidfinder_init);
-KPM_EXIT(pidfinder_exit);
+KPM_INIT(bgmi_base_finder_init);
+KPM_EXIT(bgmi_base_finder_exit);
